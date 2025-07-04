@@ -12,11 +12,13 @@ from aws_cdk import (
     aws_logs as logs,
 )
 from constructs import Construct
+from config import BaseConfig
 
-class DataPipelineStack(Stack):
+class CollectorStack(Stack):
 
-    def __init__(self, scope: Construct, id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, config: BaseConfig, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
+        self.config = config
 
         data_bucket = self.create_s3_bucket()
         lambda_role = self.create_lambda_role(data_bucket)
@@ -26,7 +28,7 @@ class DataPipelineStack(Stack):
         self.create_athena_table(glue_db, data_bucket)
 
     def create_s3_bucket(self) -> s3.Bucket:
-        return s3.Bucket(self, "DataBucket")
+        return s3.Bucket(self, "RawDataBucket")
 
     def create_lambda_role(self, bucket: s3.Bucket) -> iam.Role:
         role = iam.Role(
@@ -36,7 +38,15 @@ class DataPipelineStack(Stack):
                 iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
             ]
         )
+
         bucket.grant_read_write(role)
+
+        # Add permissions for Docker Lambda to access ECR and execute
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"))
+
+        # Add SSM access in case Chrome dependencies are stored there
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMReadOnlyAccess"))
+
         return role
 
     def create_lambda_function(self, bucket: s3.Bucket, role: iam.Role) -> _lambda.Function:
@@ -47,23 +57,22 @@ class DataPipelineStack(Stack):
             removal_policy=cdk.RemovalPolicy.DESTROY
         )
 
-        lambda_fn = _lambda.Function(
+        lambda_fn = _lambda.DockerImageFunction(
             self, "DailyDataFunction",
-            runtime=_lambda.Runtime.PYTHON_3_11,
-            handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset("lambda"),
-            timeout=Duration.minutes(5),
+            code=_lambda.DockerImageCode.from_image_asset("."),
+            timeout=Duration.minutes(10),
             role=role,
             environment={
                 "BUCKET": bucket.bucket_name
-            }
+            },
+            memory_size=2048,
+            architecture=_lambda.Architecture.X86_64  # Ensure compatibility with Chrome
         )
 
         log_group.grant_write(lambda_fn)
         return lambda_fn
 
     def schedule_lambda(self, lambda_fn: _lambda.Function) -> None:
-        # 5 AM PST = 13:00 UTC
         rule = events.Rule(
             self, "DailyScheduleRule",
             schedule=events.Schedule.cron(minute="0", hour="13")
@@ -90,7 +99,7 @@ class DataPipelineStack(Stack):
                 )
                 PARTITIONED BY (date STRING)
                 STORED AS PARQUET
-                LOCATION 's3://{bucket.bucket_name}/daily_data/'
+                LOCATION 's3://{bucket.bucket_name}/forecasts/'
             """,
             name="CreateDailyDataTable",
             description="Create Athena table for daily data",
