@@ -31,19 +31,20 @@ LOCATIONS = {
     },
 }
 
-# Setup headless Chrome
+# Setup headless Chrome for Lambda container environment
 options = Options()
 options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
+options.add_argument("--disable-gpu")
+options.add_argument("--single-process")
 options.add_argument("window-size=1920,1080")
 options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                      "AppleWebKit/537.36 (KHTML, like Gecko) "
                      "Chrome/124.0.0.0 Safari/537.36")
 
-
-service = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(service=service, options=options)
+# Initialize driver only when needed to avoid global initialization issues in Lambda
+driver = None
 
 def enable_extra_columns(driver):
     wait = WebDriverWait(driver, 10)
@@ -127,19 +128,35 @@ def persist_forecast_data(df, model_name, location):
 
 
 def lambda_handler(event, context):
-    # Scrape each model and collect DataFrames
-    all_data = {}
+    global driver
 
-    for location, loc_data in LOCATIONS.items():
-        for model_name, model_code in MODELS.items():
-            url = f"https://spotwx.com/products/grib_index.php?model={model_code}&lat={loc_data['lat']}&lon={loc_data['lon']}&tz={loc_data['tz']}&display=table"
-            print(f"Scraping {model_name} from {url}...")
+    try:
+        # Initialize the driver at runtime
+        print("Initializing Chrome WebDriver...")
+        # service = Service(ChromeDriverManager().install())
+        service = Service(ChromeDriverManager(path="/tmp").install())
+        driver = webdriver.Chrome(service=service, options=options)
 
-            df = scrape_spotwx_table(url, model_name)
-            # all_data[location][model_name] = df
-            persist_forecast_data(df, model_name, location)
+        # Scrape each model and collect DataFrames
+        all_data = {}
 
-    driver.quit()
+        for location, loc_data in LOCATIONS.items():
+            for model_name, model_code in MODELS.items():
+                url = f"https://spotwx.com/products/grib_index.php?model={model_code}&lat={loc_data['lat']}&lon={loc_data['lon']}&tz={loc_data['tz']}&display=table"
+                print(f"Scraping {model_name} from {url}...")
 
+                df = scrape_spotwx_table(url, model_name)
+                # all_data[location][model_name] = df
+                persist_forecast_data(df, model_name, location)
 
-    return {"statusCode": 200, "body": "Hello from Lambda with uv!"}
+        return {"statusCode": 200, "body": "Data collection completed successfully"}
+
+    except Exception as e:
+        print(f"Error in lambda_handler: {e}")
+        return {"statusCode": 500, "body": f"Error: {str(e)}"}
+
+    finally:
+        # Always clean up the driver
+        if driver:
+            print("Closing Chrome WebDriver...")
+            driver.quit()

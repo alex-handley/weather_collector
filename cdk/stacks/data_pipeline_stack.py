@@ -12,12 +12,13 @@ from aws_cdk import (
     aws_logs as logs,
 )
 from constructs import Construct
+from config import BaseConfig
 
-class DataPipelineStack(Stack):
+class CollectorStack(Stack):
 
-    def __init__(self, scope: Construct, id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, id: str, config: BaseConfig, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
-
+        self.config = config
         data_bucket = self.create_s3_bucket()
         lambda_role = self.create_lambda_role(data_bucket)
         lambda_fn = self.create_lambda_function(data_bucket, lambda_role)
@@ -26,7 +27,7 @@ class DataPipelineStack(Stack):
         self.create_athena_table(glue_db, data_bucket)
 
     def create_s3_bucket(self) -> s3.Bucket:
-        return s3.Bucket(self, "DataBucket")
+        return s3.Bucket(self, "RawDataBucket")
 
     def create_lambda_role(self, bucket: s3.Bucket) -> iam.Role:
         role = iam.Role(
@@ -47,16 +48,16 @@ class DataPipelineStack(Stack):
             removal_policy=cdk.RemovalPolicy.DESTROY
         )
 
-        lambda_fn = _lambda.Function(
+        lambda_fn = _lambda.DockerImageFunction(
             self, "DailyDataFunction",
-            runtime=_lambda.Runtime.PYTHON_3_11,
-            handler="handler.lambda_handler",
-            code=_lambda.Code.from_asset("lambda"),
+            code=_lambda.DockerImageCode.from_image_asset("."),
             timeout=Duration.minutes(5),
             role=role,
             environment={
                 "BUCKET": bucket.bucket_name
-            }
+            },
+            memory_size=1024,
+            architecture=_lambda.Architecture.X86_64  # Ensure compatibility with Chrome
         )
 
         log_group.grant_write(lambda_fn)
