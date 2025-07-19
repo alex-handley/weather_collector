@@ -6,9 +6,11 @@ from typing import Dict, Any
 
 class BaseConfig:
     def __init__(self):
-        self.account = os.environ.get('CDK_DEPLOY_ACCOUNT', os.environ.get('CDK_DEFAULT_ACCOUNT'))
-        self.region = os.environ.get('CDK_DEPLOY_REGION', 'us-west-2')
-        self.env_name = os.environ.get('CDK_ENV', 'development')
+        self.account = os.environ.get(
+            "CDK_DEPLOY_ACCOUNT", os.environ.get("CDK_DEFAULT_ACCOUNT")
+        )
+        self.region = os.environ.get("CDK_DEPLOY_REGION", "us-west-2")
+        self.env_name = os.environ.get("CDK_ENV", "development")
         self.application_name = "WeatherCollector"
         self.schedule = None  # default, can be overridden
 
