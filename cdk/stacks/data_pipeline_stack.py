@@ -19,6 +19,7 @@ class CollectorStack(Stack):
     def __init__(self, scope: Construct, id: str, config: BaseConfig, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
         self.config = config
+
         data_bucket = self.create_s3_bucket()
         lambda_role = self.create_lambda_role(data_bucket)
         lambda_fn = self.create_lambda_function(data_bucket, lambda_role)
@@ -37,7 +38,15 @@ class CollectorStack(Stack):
                 iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
             ]
         )
+
         bucket.grant_read_write(role)
+
+        # Add permissions for Docker Lambda to access ECR and execute
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"))
+
+        # Add SSM access in case Chrome dependencies are stored there
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMReadOnlyAccess"))
+
         return role
 
     def create_lambda_function(self, bucket: s3.Bucket, role: iam.Role) -> _lambda.Function:
@@ -51,7 +60,7 @@ class CollectorStack(Stack):
         lambda_fn = _lambda.DockerImageFunction(
             self, "DailyDataFunction",
             code=_lambda.DockerImageCode.from_image_asset("."),
-            timeout=Duration.minutes(5),
+            timeout=Duration.minutes(10),
             role=role,
             environment={
                 "BUCKET": bucket.bucket_name
@@ -64,7 +73,6 @@ class CollectorStack(Stack):
         return lambda_fn
 
     def schedule_lambda(self, lambda_fn: _lambda.Function) -> None:
-        # 5 AM PST = 13:00 UTC
         rule = events.Rule(
             self, "DailyScheduleRule",
             schedule=events.Schedule.cron(minute="0", hour="13")
@@ -91,7 +99,7 @@ class CollectorStack(Stack):
                 )
                 PARTITIONED BY (date STRING)
                 STORED AS PARQUET
-                LOCATION 's3://{bucket.bucket_name}/daily_data/'
+                LOCATION 's3://{bucket.bucket_name}/forecasts/'
             """,
             name="CreateDailyDataTable",
             description="Create Athena table for daily data",
